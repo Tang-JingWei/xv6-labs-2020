@@ -80,3 +80,31 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
+
+uint64 kgetmemfreebytes()
+{
+  struct run *r;
+  uint64 count = 0;
+
+  acquire(&kmem.lock);
+
+  r = kmem.freelist;
+  while (r)
+  {
+    count++;
+    r = r->next;
+  }
+  // printf("1 count: %d freelist: %p, end: %p\n", count, kmem.freelist, end);
+  
+  // 最好用上面的链表遍历的方法，下面这种判断地址的方法不规范且容易出错
+  // r = kmem.freelist;
+  // for(count = 0; (char *)r >= end; r = r->next) //end也要算上的，他是物理内存的起始地址
+  // {
+  //   count++;
+  // }
+  // printf("2 count: %d freelist: %p, end: %p\n", count, kmem.freelist, end);
+
+  release(&kmem.lock);
+ 
+  return (count * PGSIZE);
+}

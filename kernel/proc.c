@@ -44,6 +44,30 @@ procinit(void)
   kvminithart();
 }
 
+uint64 getusedproc()
+{
+  struct proc *p;
+  int count = 0;
+
+  for (p = proc; p < &proc[NPROC]; p++)
+  {
+    acquire(&p->lock);
+
+    if (p->state != UNUSED)
+    {
+      count++;
+    }
+
+    release(&p->lock);
+    
+  }
+
+  // printf("[debug] getUnusedProc: %d\n", count);
+
+  return count;
+  
+}
+
 // Must be called with interrupts disabled,
 // to prevent race with process being moved
 // to a different CPU.
@@ -126,6 +150,8 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  p->traceMask = 0;
 
   return p;
 }
@@ -276,6 +302,7 @@ fork(void)
   np->sz = p->sz;
 
   np->parent = p;
+  np->traceMask = p->traceMask;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);

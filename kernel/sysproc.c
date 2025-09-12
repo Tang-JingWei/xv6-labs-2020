@@ -6,6 +6,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"
 
 uint64
 sys_exit(void)
@@ -94,4 +95,44 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_trace(void)
+{
+  int n;
+  
+  if(argint(0, &n) < 0) // 获得 trace 参数
+    return -1;
+
+  // printf("trace syscall is changing the %d(pid) proc\n", myproc()->pid);
+
+  myproc()->traceMask = n;
+
+  return 0;
+}
+
+uint64
+sys_sysinfo(void)
+{
+  uint64 arginfo;
+  struct sysinfo info;
+  struct proc *p = myproc();
+
+  // 获得info地址, arginfo是应用程序传过来的，是虚拟地址va
+  if (argaddr(0, &arginfo) < 0){
+    return -1;
+  }
+
+  // printf("sys_sysinfo: addr: %d\n", (uint64)info);
+
+  info.nproc = getusedproc();
+  info.freemem = kgetmemfreebytes();
+
+  // printf("[debug]=> sys_sysinfo: unused=%d freebytes=%d\n", info.nproc, info.freemem);
+
+  if(copyout(p->pagetable, (uint64)arginfo, (char *)&info, sizeof(info)) < 0)
+      return -1;
+
+  return 0;
 }
