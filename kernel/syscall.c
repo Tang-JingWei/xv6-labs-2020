@@ -171,7 +171,7 @@ syscall(void)
     
     if (p->traceMask & ((0x01 << num))) // 掩码
     {
-      printf("%d %s: syscall %s -> %d | %d\n", p->pid, p->name, syscallNames[num], p->trapframe->a0, p->traceMask); // 打印 trace 结果
+      printf("%d %s: syscall %s -> %d\n", p->pid, p->name, syscallNames[num], p->trapframe->a0); // 打印 trace 结果
     }
   } else {
     printf("%d %s: unknown sys call %d\n",
