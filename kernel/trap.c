@@ -48,6 +48,9 @@ usertrap(void)
   struct proc *p = myproc();
   
   // save user program counter.
+  // 此时cpu的sepc是保存的进入内核前的pc值，这个是现在这个用户进程的断点，
+  // 但在目前处于内核态的时候，会出现切换到另一个进程然后又进行系统调用（yield()之后），
+  // 这样sepc会被重写，所以我们需要保存下来
   p->trapframe->epc = r_sepc();
   
   if(r_scause() == 8){
@@ -58,6 +61,7 @@ usertrap(void)
 
     // sepc points to the ecall instruction,
     // but we want to return to the next instruction.
+    // sepc保存的是发生中断的地址（ecall），但是恢复的时候需要跳到下一条指令地址，这样就不会重复执行ecall了
     p->trapframe->epc += 4;
 
     // an interrupt will change sstatus &c registers,
@@ -94,6 +98,8 @@ usertrapret(void)
   // we're about to switch the destination of traps from
   // kerneltrap() to usertrap(), so turn off interrupts until
   // we're back in user space, where usertrap() is correct.
+  // 因为下一步要写stvec为uservec了，所以如果不关中断的话，那么内核中如果
+  // 有其他中断来的话，就会跳到uservec，这是不对的
   intr_off();
 
   // send syscalls, interrupts, and exceptions to trampoline.S
@@ -116,6 +122,7 @@ usertrapret(void)
   w_sstatus(x);
 
   // set S Exception Program Counter to the saved user pc.
+  // 最后要sret返回用户空间，sret是将epc寄存器的值载入pc寄存器
   w_sepc(p->trapframe->epc);
 
   // tell trampoline.S the user page table to switch to.

@@ -15,6 +15,64 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+int
+kvmcopymappings(pagetable_t src, pagetable_t dst, int va, int sz)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+
+  for(i = PGROUNDUP(va); i < va+sz; i += PGSIZE){
+    if((pte = walk(src, i, 0)) == 0)
+      panic("kvmcopymappings: pte should exist");
+    if((*pte & PTE_V) == 0){
+      panic("kvmcopymappings: page not present");
+    }
+
+    pa = PTE2PA(*pte);
+    flags = PTE_FLAGS(*pte) & (~PTE_U);
+
+    if(mappages(dst, i, PGSIZE, (uint64)pa, flags) != 0){
+      goto err;
+    }
+  }
+  return 0;
+
+ err:
+  uvmunmap(dst, PGROUNDUP(va), (i-PGROUNDUP(va)) / PGSIZE, 0);
+  return -1;
+}
+
+pagetable_t proc_kernelpgtbl_init()
+{
+  pagetable_t kernelpgtbl = (pagetable_t) kalloc();
+  memset(kernelpgtbl, 0, PGSIZE);
+
+  // uart registers
+  uvmmap(kernelpgtbl, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // virtio mmio disk interface
+  uvmmap(kernelpgtbl, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // CLINT
+  // uvmmap(kernelpgtbl, CLINT, CLINT, 0x10000, PTE_R | PTE_W); // 进程的内核页表不要映射这个，会占用用户内存的映射空间，如果映射了的话，用户内存再映射会panic remap，重映射，映射时需要保证pte为V字段为空
+
+  // PLIC
+  uvmmap(kernelpgtbl, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // map kernel text executable and read-only.
+  uvmmap(kernelpgtbl, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+
+  // map kernel data and the physical RAM we'll make use of.
+  uvmmap(kernelpgtbl, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  uvmmap(kernelpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  return kernelpgtbl;
+}
+
 /*
  * create a direct-map page table for the kernel.
  */
@@ -45,6 +103,38 @@ kvminit()
   // map the trampoline for trap entry/exit to
   // the highest virtual address in the kernel.
   kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+}
+
+void
+vmprint(pagetable_t pagetable)
+{
+  pte_t pte[3];
+
+  printf("page table %p\n", pagetable);
+  for (int i = 0; i < 512; i++)
+  {
+    pte[2] = pagetable[i];
+    if (pte[2] & PTE_V)
+    {
+      printf("..%d: pte %p pa %p\n", i, pte[2], PTE2PA(pte[2]));
+      for (int j = 0; j < 512; j++)
+      {
+        pte[1] = ((pagetable_t)PTE2PA(pte[2]))[j];
+        if (pte[1] & PTE_V)
+        {
+          printf(".. ..%d: pte %p pa %p\n", j, pte[1], PTE2PA(pte[1]));
+          for (int k = 0; k < 512; k++)
+          {
+            pte[0] = ((pagetable_t)PTE2PA(pte[1]))[k];
+            if (pte[0] & PTE_V)
+            {
+              printf(".. .. ..%d: pte %p pa %p\n", k, pte[0], PTE2PA(pte[0]));
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 // Switch h/w page table register to the kernel's page table,
@@ -111,6 +201,13 @@ walkaddr(pagetable_t pagetable, uint64 va)
   return pa;
 }
 
+void
+uvmmap(pagetable_t pgtb, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  if(mappages(pgtb, va, sz, pa, perm) != 0)
+    panic("uvmmap");
+}
+
 // add a mapping to the kernel page table.
 // only used when booting.
 // does not flush TLB or enable paging.
@@ -126,13 +223,13 @@ kvmmap(uint64 va, uint64 pa, uint64 sz, int perm)
 // addresses on the stack.
 // assumes va is page aligned.
 uint64
-kvmpa(uint64 va)
+kvmpa(pagetable_t pgtb, uint64 va)
 {
   uint64 off = va % PGSIZE;
   pte_t *pte;
   uint64 pa;
   
-  pte = walk(kernel_pagetable, va, 0);
+  pte = walk(pgtb, va, 0);
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -248,6 +345,21 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
       return 0;
     }
   }
+  return newsz;
+}
+
+// 和 uvmdealloc 的区别就是不释放物理内存，只清除pte
+uint64
+kvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
+{
+  if(newsz >= oldsz)
+    return oldsz;
+
+  if(PGROUNDUP(newsz) < PGROUNDUP(oldsz)){
+    int npages = (PGROUNDUP(oldsz) - PGROUNDUP(newsz)) / PGSIZE;
+    uvmunmap(pagetable, PGROUNDUP(newsz), npages, 0);
+  }
+
   return newsz;
 }
 
@@ -379,23 +491,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
-  uint64 n, va0, pa0;
-
-  while(len > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > len)
-      n = len;
-    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
-
-    len -= n;
-    dst += n;
-    srcva = va0 + PGSIZE;
-  }
-  return 0;
+  return copyin_new(pagetable, dst, srcva, len);
 }
 
 // Copy a null-terminated string from user to kernel.
@@ -405,38 +501,5 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
-  uint64 n, va0, pa0;
-  int got_null = 0;
-
-  while(got_null == 0 && max > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > max)
-      n = max;
-
-    char *p = (char *) (pa0 + (srcva - va0));
-    while(n > 0){
-      if(*p == '\0'){
-        *dst = '\0';
-        got_null = 1;
-        break;
-      } else {
-        *dst = *p;
-      }
-      --n;
-      --max;
-      p++;
-      dst++;
-    }
-
-    srcva = va0 + PGSIZE;
-  }
-  if(got_null){
-    return 0;
-  } else {
-    return -1;
-  }
+  return copyinstr_new(pagetable, dst, srcva, max);
 }
