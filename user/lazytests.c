@@ -8,7 +8,7 @@
 #include "kernel/memlayout.h"
 #include "kernel/riscv.h"
 
-#define REGION_SZ (1024 * 1024 * 1024)
+#define REGION_SZ (1024 * 1024 * 1024)  // 0x40000000 1073741824
 
 void
 sparse_memory(char *s)
@@ -21,6 +21,7 @@ sparse_memory(char *s)
     exit(1);
   }
   new_end = prev_end + REGION_SZ;
+  // printf("Allocated memory from %p to %p\n", prev_end, new_end);
 
   for (i = prev_end + PGSIZE; i < new_end; i += 64 * PGSIZE)
     *(char **)i = i;
@@ -77,14 +78,17 @@ void
 oom(char *s)
 {
   void *m1, *m2;
-  int pid;
+  int pid, cnt = 0;
 
   if((pid = fork()) == 0){
     m1 = 0;
     while((m2 = malloc(4096*4096)) != 0){
+      cnt ++;
       *(char**)m2 = m1;
       m1 = m2;
+      // printf("%d ", cnt);
     }
+    // 该测试目的是保证程序不能exit(0)，也就是保证while循环malloc的时候会失败，才算成功
     exit(0);
   } else {
     int xstatus;

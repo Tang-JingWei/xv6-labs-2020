@@ -67,12 +67,53 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if((r_scause() == 15) || (r_scause() == 13)){
+    // printf("scause %p\n", r_scause());
+    uint64 va = r_stval();
+    if(va > p->sz){
+      // printf("usertrap() %d: bad addr %p pid=%d\n", r_scause(), va, p->pid);
+      // vmprint(p->pagetable);
+      p->killed = 1;
+
+      goto end;
+    }
+    va = PGROUNDDOWN(va);
+
+    if (va < p->trapframe->sp){
+      p->killed = 1;
+      // printf("usertrap: invalid address\n");
+      goto end;
+    }
+
+    // if(va == (0x40000000) || va == (0x40001000) || va == (0x40000000)){
+    //   printf("%p happend\r\n", va);
+    // }
+    char *mem;
+    mem = kalloc();
+    if(mem == 0){
+      // printf("usertrap: not ok alloc");
+      p->killed = 1;
+
+      goto end;
+    }
+    memset(mem, 0, PGSIZE);
+    if(mappages(p->pagetable, va, PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
+      // printf("usertrap: not ok mappages");
+      kfree(mem);
+
+      p->killed = 1;
+      goto end;
+      // uvmdealloc(p->pagetable, va, oldsz);
+      // return 0;
+    }
+    // printf("lazy allocation:  sepc=%p stval=%p\n", r_sepc(), r_stval());
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
 
+end:
   if(p->killed)
     exit(-1);
 

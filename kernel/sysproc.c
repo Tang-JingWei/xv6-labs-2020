@@ -43,12 +43,40 @@ sys_sbrk(void)
 {
   int addr;
   int n;
+  // pte_t *pte;
+  // uint64 a, last;
 
   if(argint(0, &n) < 0)
     return -1;
   addr = myproc()->sz;
-  if(growproc(n) < 0)
+  // printf("before: %p sz: %p\r\n", addr, myproc()->sz);
+
+  // myproc()->sz = addr + n;
+  // if(myproc()->sz > MAXVA){
+  //   // printf("oom ");
+  //   myproc()->sz = MAXVA;
+  //   return -1;
+  // }
+
+  if(n >= 0 && addr + n >= addr){
+    // printf("growproc: %p\r\n", addr + n);
+    myproc()->sz += n;    // increase size but not allocate memory
+  } else if(n < 0 && addr + n >= PGROUNDUP(myproc()->trapframe->sp)){
+    // handle negative n and addr must be above user stack - lab5-3
+    myproc()->sz = uvmdealloc(myproc()->pagetable, addr, addr + n);
+  } else {
     return -1;
+  }
+  
+  // if(n < 0){
+  //   // printf("sys_brk arg negative: %d | pid: %d | ptbl: %p\r\n", n, myproc()->pid, myproc()->pagetable);
+  //   uvmunmap(myproc()->pagetable, myproc()->sz + PGSIZE, (-n)/PGSIZE, 1);
+  //   // vmprint(myproc()->pagetable);
+  //   // printf("ok\r\n");
+  // }
+  
+  // if(growproc(n) < 0)
+  //   return -1;
   return addr;
 }
 

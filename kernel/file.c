@@ -155,6 +155,7 @@ filewrite(struct file *f, uint64 addr, int n)
     int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
     int i = 0;
     while(i < n){
+      // printf("i: %d, n: %d, max: %d\n", i, n, max);
       int n1 = n - i;
       if(n1 > max)
         n1 = max;
