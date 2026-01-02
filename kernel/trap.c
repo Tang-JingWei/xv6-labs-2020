@@ -37,6 +37,7 @@ void
 usertrap(void)
 {
   int which_dev = 0;
+  uint64 va;
 
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
@@ -67,12 +68,42 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 13 || r_scause() == 15){
+    // printf("usertrap(): cow fault pid=%d\n", p->pid);
+    va = r_stval();
+    // printf("usertrap() va: %p\r\n", va);
+
+    // 检查va范围: [p->sz, MaxVA]
+    if (va > p->sz || va >= MAXVA){
+      // printf("va: %p(sz: %p)\r\n", va, p->sz);
+      p->killed = 1;
+
+      goto end;
+    }
+
+    // 检查物理页cow标志
+    if (cowpage(p->pagetable, va) == -1){
+      // printf("cowpage\r\n");
+      p->killed = 1;
+
+      goto end;
+    }
+
+    // 检查为cow页面重新分配是否成功
+    if (cowalloc(p->pagetable, PGROUNDDOWN(va)) == 0){
+      // printf("cowalloc\r\n");
+      p->killed = 1;
+
+      goto end;
+    }
+    
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
 
+end:
   if(p->killed)
     exit(-1);
 

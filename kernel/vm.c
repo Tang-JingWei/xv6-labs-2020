@@ -15,6 +15,38 @@ extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
 
+void
+vmprint(pagetable_t pagetable)
+{
+  pte_t pte[3];
+
+  printf("page table %p\n", pagetable);
+  for (int i = 0; i < 512; i++)
+  {
+    pte[2] = pagetable[i];
+    if (pte[2] & PTE_V)
+    {
+      printf("..%d: pte %p pa %p\n", i, pte[2], PTE2PA(pte[2]));
+      for (int j = 0; j < 512; j++)
+      {
+        pte[1] = ((pagetable_t)PTE2PA(pte[2]))[j];
+        if (pte[1] & PTE_V)
+        {
+          printf(".. ..%d: pte %p pa %p\n", j, pte[1], PTE2PA(pte[1]));
+          for (int k = 0; k < 512; k++)
+          {
+            pte[0] = ((pagetable_t)PTE2PA(pte[1]))[k];
+            if (pte[0] & PTE_V)
+            {
+              printf(".. .. ..%d: pte %p pa %p\n", k, pte[0], PTE2PA(pte[0]));
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 /*
  * create a direct-map page table for the kernel.
  */
@@ -159,6 +191,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if(*pte & PTE_V)
       panic("remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
+    // cow_ref_cnt[pa / PGSIZE] ++; // cow
     if(a == last)
       break;
     a += PGSIZE;
@@ -311,7 +344,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  // char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -319,14 +352,17 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    *pte = (*pte & ~PTE_W) | PTE_RSW_0; // cow：去掉写权限，标记为COW页
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
+      // kfree(mem);
       goto err;
     }
+
+    kaddrefcnt((uint64*)pa);
   }
   return 0;
 
@@ -359,6 +395,11 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr(pagetable, va0);
+
+    if (cowpage(pagetable, va0) == 0){
+      pa0 = (uint64)cowalloc(pagetable, va0);
+    }
+
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
