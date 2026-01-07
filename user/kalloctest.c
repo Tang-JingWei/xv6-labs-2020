@@ -63,6 +63,7 @@ void test1(void)
     }
   }
 
+  // TODO: 为什么要for 两次，一个wait不就可以了吗？
   for(int i = 0; i < NCHILD; i++){
     wait(0);
   }
