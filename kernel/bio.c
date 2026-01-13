@@ -34,7 +34,7 @@ struct hashbuf
 };
 
 struct {
-  struct spinlock lock;
+  // struct spinlock lock;
   struct buf buf[NBUF];
 
   // Linked list of all buffers, through prev/next.
@@ -49,7 +49,7 @@ binit(void)
 {
   // struct buf *b;
 
-  initlock(&bcache.lock, "bcache");
+  // initlock(&bcache.lock, "bcache");
 
   for (int i = 0; i < NBUCKET; i++)
   {
@@ -61,17 +61,10 @@ binit(void)
 
   // 初始化将所有缓冲区挂载在第一个桶中
   for (int i = 0; i < NBUF; i++) {
-    if (i == 0) {
-      bcache.buf[i].prev = &bcache.buckets[0].head;
-      bcache.buf[i].next = &bcache.buf[i+1];
-      bcache.buckets[0].head.next = &bcache.buf[i];
-    } else if (i == NBUF - 1) {
-      bcache.buf[i].next = 0;
-      bcache.buf[i].prev = &bcache.buf[i-1];
-    } else {
-      bcache.buf[i].next = &bcache.buf[i+1];
-      bcache.buf[i].prev = &bcache.buf[i-1];
-    }
+    bcache.buf[i].next = bcache.buckets[0].head.next;
+    bcache.buf[i].prev = &bcache.buckets[0].head;
+    bcache.buckets[0].head.next->prev = &bcache.buf[i];
+    bcache.buckets[0].head.next = &bcache.buf[i];
   }
 }
 
@@ -88,12 +81,7 @@ bget(uint dev, uint blockno)
   acquire(&bcache.buckets[bid].lock);
 
   // 遍历哈希桶
-  b = bcache.buckets[bid].head.next;
-  for (int i = 0; ; i++) {
-    if (bcache.buckets[bid].head.next == b) { // 空桶
-      break;
-    }
-
+  for (b = bcache.buckets[bid].head.next; &bcache.buckets[bid].head != b; b = b->next) {
     if ((b->blockno == blockno) && (b->dev == dev)) { // 匹配到了
       b->refcnt ++;
 
@@ -107,8 +95,6 @@ bget(uint dev, uint blockno)
       acquiresleep(&b->lock); // TODO ?
       return b;
     }
-    
-    b = b->next;    
   }
 
   // 未缓存，尝试找一块缓存
@@ -200,26 +186,20 @@ brelse(struct buf *b)
   if(!holdingsleep(&b->lock))
     panic("brelse");
 
-  releasesleep(&b->lock);
+  uint bid = HASH(b->blockno);
 
-  // acquire(&bcache.lock);
+  // 先释放小锁b->lock，再释放大锁bcache.buckets[bid].lock
+  releasesleep(&b->lock);
+  acquire(&bcache.buckets[bid].lock);
+
   b->refcnt--;
-  // if (b->refcnt == 0) {
-  //   // no one is waiting for it.
-  //   b->next->prev = b->prev;
-  //   b->prev->next = b->next;
-  //   b->next = bcache.head.next;
-  //   b->prev = &bcache.head;
-  //   bcache.head.next->prev = b;
-  //   bcache.head.next = b;
-  // }
 
   // 释放时更新时间戳
   acquire(&tickslock);
   b->timestamp = ticks;
   release(&tickslock);
   
-  // release(&bcache.lock);
+  release(&bcache.buckets[bid].lock);
 }
 
 void
