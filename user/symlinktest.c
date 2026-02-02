@@ -74,6 +74,7 @@ testsymlink(void)
   if(write(fd1, buf, sizeof(buf)) != 4)
     fail("failed to write to a");
 
+  // 测试 O_NOFOLLOW 的打开方式是否正确打开 T_SYMLINK 而不是追踪
   if (stat_slink("/testsymlink/b", &st) != 0)
     fail("failed to stat b");
   if(st.type != T_SYMLINK)
@@ -158,6 +159,7 @@ concur(void)
       int m = 0;
       unsigned int x = (pid ? 1 : 97);
       for(i = 0; i < 100; i++){
+        // printf("child: %d cycle: %d \n",j, i);
         x = x * 1103515245 + 12345;
         if((x % 3) == 0) {
           symlink("/testsymlink/z", "/testsymlink/y");

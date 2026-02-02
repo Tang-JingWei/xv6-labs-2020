@@ -286,7 +286,7 @@ create(char *path, short type, short major, short minor)
 uint64
 sys_open(void)
 {
-  char path[MAXPATH];
+  char path[MAXPATH], buf[MAXPATH];
   int fd, omode;
   struct file *f;
   struct inode *ip;
@@ -320,6 +320,42 @@ sys_open(void)
     iunlockput(ip);
     end_op();
     return -1;
+  }
+
+  // 符号链接类型
+  if(ip->type == T_SYMLINK){
+    if(!(omode & O_NOFOLLOW)){ // 追踪
+      for (int i = 0; i < 10; i++){ // 最大追踪深度设置为10次
+        if(i == 9){
+          // 最大深度已经到达，表示循环引用
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+
+        if(readi(ip, 0, (uint64)buf, 0, sizeof(buf)) != sizeof(buf))
+          panic("sys_open: readi");
+        // printf("%d - symlink %d(ref: %d) content: %s\r\n",i, ip->inum, ip->ref, buf);
+
+        iunlockput(ip); // 读完解锁并put
+
+        if((ip = namei(buf)) == 0){
+          // iunlockput(ip);
+          end_op();
+          return -1;
+        }
+
+        ilock(ip);
+        if (ip->type == T_SYMLINK) {
+          // iunlockput(ip);  // 循环link的状态下，会导致iunlock解锁panic
+          continue;
+        }
+
+        break;
+      }
+    } else { // 读符号链接本身
+      //
+    }
   }
 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
@@ -483,4 +519,40 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+uint64
+sys_symlink(void)
+{
+  char symbolic[MAXPATH], target[MAXPATH];
+  struct inode *ip;
+
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, symbolic, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+
+  if((ip = create(symbolic, T_SYMLINK, 0, 0)) == 0){
+    // iunlockput(dp);
+    goto bad;
+  }
+
+  // 写target路径到ip
+  // ilock(ip); // 不需要加锁，create 里面已经给ip上锁了
+  if(writei(ip, 0, (uint64)target, 0, sizeof(target)) != sizeof(target))
+    panic("sys_symlink writei");
+
+  iunlockput(ip); // !!!卡了很久的bug，应该需要put的，因为前面的create中会iget，增加了ref计数
+
+  end_op();
+
+  return 0;
+
+bad:
+  // ilock(ip);
+  // ip->nlink--;
+  // iupdate(ip);
+  // iunlockput(ip);
+  end_op();
+  return -1;
 }
